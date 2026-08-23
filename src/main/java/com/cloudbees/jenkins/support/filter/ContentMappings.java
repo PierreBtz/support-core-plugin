@@ -163,16 +163,17 @@ public class ContentMappings extends ManagementLink implements Saveable, Iterabl
      *
      * <p>Uses {@code computeIfPresent} to express the remove-if-stale decision as one map operation. A concurrent
      * {@code touch()} after the staleness check can still be lost, causing the mapping to be evicted and recreated
-     * on next use. This becomes benign once pseudonym derivation is deterministic (in-flight work), because the
+     * on next use. This is benign since pseudonym derivation is deterministic (in-flight work), because the
      * recreated mapping then receives the identical pseudonym.
      *
      * <p>Must be called from within a {@link BulkChange} so the eviction is persisted.
      */
     public void evictStale() {
-        Instant cutoff = Instant.now().minus(retention());
+        Duration retention = retention();
+        Instant cutoff = Instant.now().minus(retention);
         // Counter lives inside the lambda so it only increments when a removal actually happens.
-        // Concurrent bundle generation is possible (writeBundle is public static), so the count is
-        // approximate under contention. ConcurrentSkipListMap may also retry the lambda on CAS failure.
+        // computeIfPresent may apply the lambda more than once if its compare-and-set loses, so under
+        // concurrent bundle generation the count can overshoot. It only feeds the log line below.
         int[] removed = {0};
         for (String key : mappings.keySet()) {
             mappings.computeIfPresent(key, (k, v) -> {
@@ -186,7 +187,7 @@ public class ContentMappings extends ManagementLink implements Saveable, Iterabl
         if (removed[0] > 0) {
             int count = removed[0];
             LOGGER.fine(() -> "Evicted " + count + " stale content mapping" + (count == 1 ? "" : "s")
-                    + " (retention window: " + retention().toDays() + " days)");
+                    + " (retention window: " + retention + ")");
         }
     }
 

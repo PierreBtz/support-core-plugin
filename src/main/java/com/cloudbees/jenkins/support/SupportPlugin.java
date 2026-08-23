@@ -562,7 +562,11 @@ public class SupportPlugin extends Plugin {
                     }
                 }
                 binaryOut.flush();
-                ContentMappings.get().evictStale();
+                // Only evict when anonymization actually ran: with ContentFilter.NONE nothing calls touch(), so
+                // every mapping would look stale and the whole table would be dropped.
+                if (filter != ContentFilter.NONE) {
+                    ContentMappings.get().evictStale();
+                }
                 change.commit();
             }
         } finally {

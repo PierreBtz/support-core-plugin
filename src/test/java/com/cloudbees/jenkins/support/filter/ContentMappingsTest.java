@@ -31,9 +31,11 @@ import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.cloudbees.jenkins.support.SupportPlugin;
 import hudson.BulkChange;
 import hudson.model.FreeStyleProject;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -358,5 +360,21 @@ class ContentMappingsTest {
                 replacement,
                 mappings.getMappings().get(testName),
                 "mapping should keep the same replacement on second cycle");
+    }
+
+    @Test
+    void staleMappingSurvivesBundleWhenAnonymizationDisabled(JenkinsRule r) throws Exception {
+        String testName = "anonymization-disabled";
+        ContentMappings mappings = ContentMappings.get();
+
+        mappings.getMappingOrCreate(testName, ContentMappingsTest::identityMapping)
+                .touch(Instant.now().minus(Duration.ofDays(91)));
+
+        ContentFilters.get().setEnabled(false);
+        SupportPlugin.writeBundle(OutputStream.nullOutputStream(), List.of());
+
+        assertTrue(
+                ContentMappings.get().getMappings().containsKey(testName),
+                "with anonymization disabled nothing calls touch(), so eviction must not run");
     }
 }
