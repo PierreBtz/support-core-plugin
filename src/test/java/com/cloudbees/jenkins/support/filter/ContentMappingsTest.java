@@ -193,6 +193,25 @@ class ContentMappingsTest {
     }
 
     @Test
+    void evictionLogReportsSubDayRetentionWindows(JenkinsRule r) {
+        ContentMappings mappings = ContentMappings.get();
+        mappings.getMappingOrCreate("stale-entry", ContentMappingsTest::identityMapping)
+                .touch(Instant.now().minus(Duration.ofDays(91)));
+
+        System.setProperty(ContentMappings.class.getName() + ".RETENTION", "PT15S");
+        try (LogRecorder logger =
+                new LogRecorder().record(ContentMappings.class, Level.FINE).capture(1)) {
+            mappings.evictStale();
+
+            assertTrue(
+                    logger.getMessages().stream().anyMatch(msg -> msg.contains("retention window: PT15S")),
+                    "a sub-day retention window must be logged in full, not truncated to whole days");
+        } finally {
+            System.clearProperty(ContentMappings.class.getName() + ".RETENTION");
+        }
+    }
+
+    @Test
     @LocalData
     void migratedMappingDefaultsLastSeenToNowNotEpoch(JenkinsRule r) {
         ContentMappings mappings = ContentMappings.get();
