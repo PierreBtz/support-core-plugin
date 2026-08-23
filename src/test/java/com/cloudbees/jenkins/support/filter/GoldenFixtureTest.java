@@ -56,7 +56,7 @@ class GoldenFixtureTest {
     private static final String GOLDEN_HASH = "7ad4444ec71bb8666657c0eaf9e7dc0883399d3e17ee3d76452fae60ce92d2fc";
 
     @Test
-    void producesbyteIdenticalRegexToOriginMaster() throws Exception {
+    void producesByteIdenticalRegexToOriginMaster() throws Exception {
         List<String> words = DeterministicWordListGenerator.generate();
 
         WordsTrie trie = new WordsTrie();
