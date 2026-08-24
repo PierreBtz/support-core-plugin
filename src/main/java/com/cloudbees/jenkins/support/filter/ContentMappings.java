@@ -182,7 +182,7 @@ public class ContentMappings extends ManagementLink implements Saveable, Iterabl
      * has already swept it away. Do not rely on the mapping simply being recreated later -- for an item that has
      * been deleted, nothing recreates it.
      *
-     * <p>Must be called from within a {@link BulkChange} so the eviction is persisted.
+     * <p>Must be called from within a {@link hudson.BulkChange} so the eviction is persisted.
      */
     public void evictStale() {
         Duration retention = retention();
