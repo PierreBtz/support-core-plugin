@@ -117,14 +117,16 @@ class WordsTrieTest {
 
     @Test
     void metacharactersAndCharacterClassSpecialChars() {
-        WordsTrie trie = new WordsTrie();
-        for (String w : List.of(
+        List<String> words = List.of(
                 ".", "*", "+", "?", "[", "]", "(", ")", "{", "}", "^", "$", "|", "\\", "/", "-", "a-b", "a^b", "a]b",
-                "a[b")) {
+                "a[b");
+        WordsTrie trie = new WordsTrie();
+        for (String w : words) {
             trie.add(w);
         }
-        // Just verify it doesn't throw - the exact regex is complex
-        assertThat(trie.getRegex()).isNotNull();
+        // Escaping is the point here, so compile and match rather than just checking the string exists: an
+        // unescaped metacharacter either fails to compile or silently matches something other than the literal.
+        assertMatchesExactlyTheseWords(trie.getRegex(), words);
     }
 
     @Test
@@ -133,8 +135,7 @@ class WordsTrieTest {
         // code points; İ (U+0130) and ſ (U+017F) are the classic Unicode case-folding edge cases.
         String grinning = new String(Character.toChars(0x1F600));
         String fraktur = new String(Character.toChars(0x1D50A));
-        WordsTrie trie = new WordsTrie();
-        for (String w : List.of(
+        List<String> words = List.of(
                 "a" + grinning + "b",
                 "a" + grinning + "c",
                 fraktur + "oo",
@@ -143,11 +144,14 @@ class WordsTrieTest {
                 "ſ",
                 "İ",
                 grinning,
-                fraktur)) {
+                fraktur);
+        WordsTrie trie = new WordsTrie();
+        for (String w : words) {
             trie.add(w);
         }
-        // Just verify it doesn't throw - the exact regex is complex
-        assertThat(trie.getRegex()).isNotNull();
+        // A surrogate pair split across a character class would still compile, so matching is what proves the
+        // code points survived intact.
+        assertMatchesExactlyTheseWords(trie.getRegex(), words);
     }
 
     @Test
@@ -306,5 +310,19 @@ class WordsTrieTest {
         atoms.add(new String(Character.toChars(0x1F600)));
         atoms.add(new String(Character.toChars(0x10000)));
         return atoms;
+    }
+
+    /**
+     * Asserts the emitted regex compiles and matches every word it was built from in full. Uses
+     * {@link java.util.regex.Matcher#matches()}, which requires the whole input to be consumed, so a regex that
+     * matched only a fragment of a word would fail here.
+     */
+    private static void assertMatchesExactlyTheseWords(String regex, List<String> words) {
+        Pattern pattern = Pattern.compile(regex);
+        for (String word : words) {
+            assertThat(pattern.matcher(word).matches())
+                    .as("regex should match the literal word %s", word)
+                    .isTrue();
+        }
     }
 }
