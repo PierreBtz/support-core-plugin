@@ -76,13 +76,14 @@ public class SensitiveContentFilter implements ContentFilter {
 
     // An actual match in real content keeps this mapping alive even if the original item is gone -- see
     // ContentMappings#evictStale(). Deliberately not touched during the pre-fill loop in reload() below, only here,
-    // on a real match.
+    // on a real match. Goes through touchMatched rather than touch() because this snapshot may outlive the mapping's
+    // presence in the table: a concurrently generated bundle can have evicted it since the reload.
     private static String replacementFor(
             String match, Map<String, ContentMapping> matched, Map<String, String> replacements) {
         String lowerCase = match.toLowerCase(Locale.ENGLISH);
         ContentMapping mapping = matched.get(lowerCase);
         if (mapping != null) {
-            mapping.touch();
+            ContentMappings.get().touchMatched(mapping);
         }
         return replacements.get(lowerCase);
     }

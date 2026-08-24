@@ -144,6 +144,20 @@ public class ContentMappings extends ManagementLink implements Saveable, Iterabl
         return mapping;
     }
 
+    /**
+     * Records that a mapping was matched in real content, re-inserting it if it is no longer held.
+     *
+     * <p>{@code touch()} alone is not enough here. A filter works from a {@link SensitiveContentFilter} snapshot
+     * taken at reload time, so a concurrently generated bundle can have evicted the mapping in the meantime; the
+     * touch would then land on a detached object and be lost. Nothing else would put it back, because the pre-fill
+     * loop only reads this table and no {@link NameProvider} reports an item that has been deleted -- so the value
+     * would silently stop being redacted in later bundles. A match proves it is still live, so it goes back in.
+     */
+    void touchMatched(@NonNull ContentMapping mapping) {
+        mapping.touch();
+        mappings.putIfAbsent(mapping.getOriginal(), mapping);
+    }
+
     public void reload() {
         Jenkins.get().allItems(AbstractItem.class).forEach(item -> {
             stopWords.add(item.getTaskNoun().toLowerCase(Locale.ENGLISH));
@@ -161,10 +175,12 @@ public class ContentMappings extends ManagementLink implements Saveable, Iterabl
      * Evicts mappings that have not been touched within the retention window. This method runs after all content
      * has been filtered, so every currently-live and currently-matched mapping has been refreshed via {@code touch()}.
      *
-     * <p>Uses {@code computeIfPresent} to express the remove-if-stale decision as one map operation. A concurrent
-     * {@code touch()} after the staleness check can still be lost, causing the mapping to be evicted and recreated
-     * on next use. This is benign since pseudonym derivation is deterministic (in-flight work), because the
-     * recreated mapping then receives the identical pseudonym.
+     * <p>Uses {@code computeIfPresent} to express the remove-if-stale decision as one map operation. That is not
+     * atomic with respect to {@code touch()}, which mutates {@code lastSeen} in place rather than replacing the map
+     * value, so a touch landing between the staleness check and the removal is lost. {@link #touchMatched} covers
+     * the case where that matters: a mapping matched in real content is put back if a concurrently generated bundle
+     * has already swept it away. Do not rely on the mapping simply being recreated later -- for an item that has
+     * been deleted, nothing recreates it.
      *
      * <p>Must be called from within a {@link BulkChange} so the eviction is persisted.
      */

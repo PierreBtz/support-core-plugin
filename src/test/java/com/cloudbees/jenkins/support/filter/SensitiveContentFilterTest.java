@@ -159,6 +159,31 @@ class SensitiveContentFilterTest {
         assertThat(mappings.getMappings()).containsKey(keptName).doesNotContainKey(droppedName);
     }
 
+    @Test
+    void strayReferenceSurvivesEvictionByAConcurrentBundle(JenkinsRule j) throws IOException {
+        SensitiveContentFilter filter = SensitiveContentFilter.get();
+        FreeStyleProject project = j.createFreeStyleProject("concurrentproject");
+        filter.reload();
+        String name = project.getName();
+        String replacement = filter.filter(name);
+
+        j.jenkins.remove(project);
+        // This bundle's snapshot still holds the mapping: reload() pre-fills from the persisted table.
+        filter.reload();
+
+        ContentMappings mappings = ContentMappings.get();
+        backdate(mappings, name, Instant.now().minus(Duration.ofDays(91)));
+
+        // Stand in for a second bundle generated at the same time, sweeping the mapping out from under us.
+        mappings.evictStale();
+        assertThat(mappings.getMappings()).doesNotContainKey(name);
+
+        // Matching a stray reference has to put the mapping back. Nothing else will: the pre-fill loop reads
+        // only the table, and no NameProvider reports a deleted item, so the name would leak from here on.
+        assertThat(filter.filter(name)).isEqualTo(replacement);
+        assertThat(mappings.getMappings()).containsEntry(name, replacement);
+    }
+
     private static void backdate(ContentMappings mappings, String original, Instant lastSeen) {
         StreamSupport.stream(mappings.spliterator(), false)
                 .filter(mapping -> mapping.getOriginal().equals(original))
