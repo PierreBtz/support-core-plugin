@@ -33,6 +33,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -55,9 +56,16 @@ public class SensitiveContentFilter implements ContentFilter {
     // A pattern and its two derived maps, published as one atomic unit so a concurrent reload() can never be
     // observed as a torn mix of an old pattern with newer maps (or vice versa) -- see replacementFor(). Since
     // the maps are always built from exactly the same names as the pattern, a match can never fail to resolve.
-    private record Snapshot(Pattern pattern, Map<String, String> replacements, Map<String, ContentMapping> matched) {
+    // onMatch is captured at reload time rather than looked up per match, so filtering never depends on Jenkins
+    // still being up -- ExtensionList.lookupSingleton throws once Jenkins.getInstanceOrNull() returns null, which
+    // can happen while a bundle write is still draining during shutdown.
+    private record Snapshot(
+            Pattern pattern,
+            Map<String, String> replacements,
+            Map<String, ContentMapping> matched,
+            Consumer<ContentMapping> onMatch) {
         // Matches nothing, so filter() is a no-op before the first reload() rather than risking an NPE.
-        private static final Snapshot EMPTY = new Snapshot(Pattern.compile("(?!)"), Map.of(), Map.of());
+        private static final Snapshot EMPTY = new Snapshot(Pattern.compile("(?!)"), Map.of(), Map.of(), m -> {});
     }
 
     private final AtomicReference<Snapshot> snapshot = new AtomicReference<>(Snapshot.EMPTY);
@@ -70,22 +78,20 @@ public class SensitiveContentFilter implements ContentFilter {
     public @NonNull String filter(@NonNull String input) {
         // Snapshot once per call so a concurrent reload() can't be observed partway through.
         Snapshot current = snapshot.get();
-        return WordReplacer.replaceWords(
-                input, current.pattern(), match -> replacementFor(match, current.matched(), current.replacements()));
+        return WordReplacer.replaceWords(input, current.pattern(), match -> replacementFor(match, current));
     }
 
     // An actual match in real content keeps this mapping alive even if the original item is gone -- see
-    // ContentMappings#evictStale(). Deliberately not touched during the pre-fill loop in reload() below, only here,
+    // ContentMappings#evictStale(). Deliberately not recorded during the pre-fill loop in reload() below, only here,
     // on a real match. Goes through touchMatched rather than touch() because this snapshot may outlive the mapping's
     // presence in the table: a concurrently generated bundle can have evicted it since the reload.
-    private static String replacementFor(
-            String match, Map<String, ContentMapping> matched, Map<String, String> replacements) {
+    private static String replacementFor(String match, Snapshot snapshot) {
         String lowerCase = match.toLowerCase(Locale.ENGLISH);
-        ContentMapping mapping = matched.get(lowerCase);
+        ContentMapping mapping = snapshot.matched().get(lowerCase);
         if (mapping != null) {
-            ContentMappings.get().touchMatched(mapping);
+            snapshot.onMatch().accept(mapping);
         }
-        return replacements.get(lowerCase);
+        return snapshot.replacements().get(lowerCase);
     }
 
     @Override
@@ -141,7 +147,7 @@ public class SensitiveContentFilter implements ContentFilter {
                 }));
         Pattern pattern = Pattern.compile(
                 "(?<!\\w)" + trie.getRegex() + "(?!\\w)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-        this.snapshot.set(new Snapshot(pattern, replacementsMap, matchedMappings));
+        this.snapshot.set(new Snapshot(pattern, replacementsMap, matchedMappings, mappings::touchMatched));
         LOGGER.log(Level.FINE, "Took " + (System.currentTimeMillis() - startTime) + "ms to reload");
     }
 }
