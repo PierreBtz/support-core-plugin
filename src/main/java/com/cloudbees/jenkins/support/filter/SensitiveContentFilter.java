@@ -33,6 +33,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -52,8 +53,22 @@ public class SensitiveContentFilter implements ContentFilter {
 
     private static final Logger LOGGER = Logger.getLogger(SensitiveContentFilter.class.getName());
 
-    private final AtomicReference<Pattern> mappingsPattern = new AtomicReference<>();
-    private final AtomicReference<Map<String, String>> replacementsMap = new AtomicReference<>();
+    // A pattern and its two derived maps, published as one atomic unit so a concurrent reload() can never be
+    // observed as a torn mix of an old pattern with newer maps (or vice versa) -- see replacementFor(). Since
+    // the maps are always built from exactly the same names as the pattern, a match can never fail to resolve.
+    // onMatch is captured at reload time rather than looked up per match, so filtering never depends on Jenkins
+    // still being up -- ExtensionList.lookupSingleton throws once Jenkins.getInstanceOrNull() returns null, which
+    // can happen while a bundle write is still draining during shutdown.
+    private record Snapshot(
+            Pattern pattern,
+            Map<String, String> replacements,
+            Map<String, ContentMapping> matched,
+            Consumer<ContentMapping> onMatch) {
+        // Matches nothing, so filter() is a no-op before the first reload() rather than risking an NPE.
+        private static final Snapshot EMPTY = new Snapshot(Pattern.compile("(?!)"), Map.of(), Map.of(), m -> {});
+    }
+
+    private final AtomicReference<Snapshot> snapshot = new AtomicReference<>(Snapshot.EMPTY);
 
     public static SensitiveContentFilter get() {
         return ExtensionList.lookupSingleton(SensitiveContentFilter.class);
@@ -61,13 +76,29 @@ public class SensitiveContentFilter implements ContentFilter {
 
     @Override
     public @NonNull String filter(@NonNull String input) {
-        return WordReplacer.replaceWords(input, mappingsPattern.get(), replacementsMap.get());
+        // Snapshot once per call so a concurrent reload() can't be observed partway through.
+        Snapshot current = snapshot.get();
+        return WordReplacer.replaceWords(input, current.pattern(), match -> replacementFor(match, current));
+    }
+
+    // An actual match in real content keeps this mapping alive even if the original item is gone -- see
+    // ContentMappings#evictStale(). Deliberately not recorded during the pre-fill loop in reload() below, only here,
+    // on a real match. Goes through touchMatched rather than touch() because this snapshot may outlive the mapping's
+    // presence in the table: a concurrently generated bundle can have evicted it since the reload.
+    private static String replacementFor(String match, Snapshot snapshot) {
+        String lowerCase = match.toLowerCase(Locale.ENGLISH);
+        ContentMapping mapping = snapshot.matched().get(lowerCase);
+        if (mapping != null) {
+            snapshot.onMatch().accept(mapping);
+        }
+        return snapshot.replacements().get(lowerCase);
     }
 
     @Override
     public synchronized void reload() {
         final long startTime = System.currentTimeMillis();
         final Map<String, String> replacementsMap = new HashMap<>();
+        final Map<String, ContentMapping> matchedMappings = new HashMap<>();
         final WordsTrie trie = new WordsTrie();
         final ContentMappings mappings = ContentMappings.get();
         Set<String> stopWords = mappings.getStopWords();
@@ -87,6 +118,7 @@ public class SensitiveContentFilter implements ContentFilter {
                                         .getReplacement()
                                         .replaceAll("\\\\", "\\\\\\\\")
                                         .replaceAll("\\$", "\\\\\\$"));
+                        matchedMappings.put(lowerCaseOriginal, contentMapping);
                         trie.add(lowerCaseOriginal);
                     }
                 });
@@ -99,6 +131,8 @@ public class SensitiveContentFilter implements ContentFilter {
                     // But the reload is already quite fast anyway. (~1s for 10^4 items with 1 CPU / 2 GB memory
                     // container)
                     if (!stopWords.contains(lowerCaseOriginal)) {
+                        // getMappingOrCreate touches the mapping (refreshes lastSeen) on every call, hit or miss --
+                        // that's the "live" signal, since name is something a NameProvider currently reports.
                         ContentMapping mapping = mappings.getMappingOrCreate(
                                 name, original -> ContentMapping.of(original, provider.generateFake()));
                         // Matcher#appendReplacement needs to have the `\` and `$` escaped.
@@ -107,12 +141,13 @@ public class SensitiveContentFilter implements ContentFilter {
                                 mapping.getReplacement()
                                         .replaceAll("\\\\", "\\\\\\\\")
                                         .replaceAll("\\$", "\\\\\\$"));
+                        matchedMappings.putIfAbsent(lowerCaseOriginal, mapping);
                         trie.add(lowerCaseOriginal);
                     }
                 }));
-        this.mappingsPattern.set(Pattern.compile(
-                "(?<!\\w)" + trie.getRegex() + "(?!\\w)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE));
-        this.replacementsMap.set(replacementsMap);
+        Pattern pattern = Pattern.compile(
+                "(?<!\\w)" + trie.getRegex() + "(?!\\w)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        this.snapshot.set(new Snapshot(pattern, replacementsMap, matchedMappings, mappings::touchMatched));
         LOGGER.log(Level.FINE, "Took " + (System.currentTimeMillis() - startTime) + "ms to reload");
     }
 }
