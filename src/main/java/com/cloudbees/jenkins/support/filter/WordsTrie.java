@@ -1,5 +1,6 @@
 package com.cloudbees.jenkins.support.filter;
 
+import edu.umd.cs.findbugs.annotations.CheckForNull;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -65,7 +66,7 @@ public class WordsTrie {
      *
      * @return the regex String of this Trie.
      */
-    public String getRegex() {
+    public @CheckForNull String getRegex() {
         if (words.isEmpty()) {
             // No data, stop here
             return null;
