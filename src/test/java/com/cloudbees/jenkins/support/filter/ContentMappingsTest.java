@@ -382,6 +382,20 @@ class ContentMappingsTest {
     }
 
     @Test
+    void writeBundleEvictsStaleWhenAnonymizationEnabled(JenkinsRule r) throws Exception {
+        ContentMappings mappings = ContentMappings.get();
+        mappings.getMappingOrCreate("stale-via-bundle", ContentMappingsTest::identityMapping)
+                .touch(Instant.now().minus(Duration.ofDays(91)));
+
+        ContentFilters.get().setEnabled(true);
+        SupportPlugin.writeBundle(OutputStream.nullOutputStream(), List.of());
+
+        assertFalse(
+                ContentMappings.get().getMappings().containsKey("stale-via-bundle"),
+                "writeBundle with anonymization enabled should evict stale mappings");
+    }
+
+    @Test
     void staleMappingSurvivesBundleWhenAnonymizationDisabled(JenkinsRule r) throws Exception {
         String testName = "anonymization-disabled";
         ContentMappings mappings = ContentMappings.get();
